@@ -119,7 +119,7 @@ func handleConnection(clientConn net.Conn) {
 
 func filterInvalidHeaders(headers http.Header) {
 	// Define invalid headers
-	invalidHeaders := []string{"!~Passenger-Proto", "!~Passenger-Client-Address", "!~Passenger-Envvars"}
+	invalidHeaders := []string{"!~passenger-Proto", "!~passenger-Client-Address", "!~passenger-Envvars"}
 
 	for _, header := range invalidHeaders {
 		delete(headers, header)
