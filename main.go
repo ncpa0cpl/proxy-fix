@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"time"
 )
 
 func GetFreePort() (port int, err error) {
@@ -24,6 +25,7 @@ func GetFreePort() (port int, err error) {
 }
 
 var outPort int
+var firstConn = true
 var reg *regexp.Regexp = regexp.MustCompile("[^a-zA-Z0-9-]+")
 
 func init() {
@@ -101,8 +103,15 @@ func handleConnection(clientConn net.Conn) {
 
 	// Connect to the destination server
 	outConn := fmt.Sprintf("localhost:%d", outPort)
+	retries := 0
+retry:
 	destConn, err := net.Dial("tcp", outConn)
 	if err != nil {
+		if firstConn && retries < 20 {
+			time.Sleep(time.Second * 1)
+			retries += 1
+			goto retry
+		}
 		fmt.Printf("Error connecting to destination: %v\n", err)
 		return
 	}
@@ -117,6 +126,7 @@ func handleConnection(clientConn net.Conn) {
 
 	// Copy the response from the destination to the client
 	io.Copy(clientConn, destConn)
+	firstConn = false
 }
 
 func filterInvalidHeaders(headers http.Header) {
