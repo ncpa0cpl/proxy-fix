@@ -46,14 +46,6 @@ func init() {
 
 		fmt.Printf("Started process %s with PID %d\n", os.Args[1], cmd.Process.Pid)
 
-		// Wait for the command to finish
-		err = cmd.Wait()
-		if err != nil {
-			fmt.Printf("Command finished with error: %v\n", err)
-		}
-
-		// Exit after running the command
-		os.Exit(0)
 	}
 }
 
@@ -130,8 +122,6 @@ func filterInvalidHeaders(headers http.Header) {
 	invalidHeaders := []string{"!~Passenger-Proto", "!~Passenger-Client-Address", "!~Passenger-Envvars"}
 
 	for _, header := range invalidHeaders {
-		if _, ok := headers[header]; ok {
-			delete(headers, header)
-		}
+		delete(headers, header)
 	}
 }
