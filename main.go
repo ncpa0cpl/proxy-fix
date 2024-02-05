@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 )
 
 func GetFreePort() (port int, err error) {
@@ -23,6 +24,7 @@ func GetFreePort() (port int, err error) {
 }
 
 var outPort int
+var reg *regexp.Regexp = regexp.MustCompile("[^a-zA-Z0-9-]+")
 
 func init() {
 	var err error
@@ -119,9 +121,10 @@ func handleConnection(clientConn net.Conn) {
 
 func filterInvalidHeaders(headers http.Header) {
 	// Define invalid headers
-	invalidHeaders := []string{"!~passenger-Proto", "!~passenger-Client-Address", "!~passenger-Envvars"}
 
-	for _, header := range invalidHeaders {
-		delete(headers, header)
+	for header := range headers {
+		if reg.FindString(header) != "" {
+			delete(headers, header)
+		}
 	}
 }
