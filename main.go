@@ -1,45 +1,80 @@
 package main
 
 import (
-	"bufio"
+	"crypto/tls"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
-	"time"
+	"strconv"
 )
 
-func GetFreePort() (port int, err error) {
-	var a *net.TCPAddr
-	if a, err = net.ResolveTCPAddr("tcp", "localhost:0"); err == nil {
-		var l *net.TCPListener
-		if l, err = net.ListenTCP("tcp", a); err == nil {
-			defer l.Close()
-			return l.Addr().(*net.TCPAddr).Port, nil
-		}
-	}
-	return
+var headerRegx *regexp.Regexp = regexp.MustCompile("[^a-zA-Z0-9-]+")
+
+type Proxy struct {
+	target     *url.URL
+	targetPort int
+	revp       *httputil.ReverseProxy
 }
 
-var outPort int
-var firstConn = true
-var reg *regexp.Regexp = regexp.MustCompile("[^a-zA-Z0-9-]+")
+func (proxy *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	removeInvalidHeaders(&r.Header)
+	proxy.revp.ServeHTTP(w, r)
+}
 
-func init() {
-	var err error
-	outPort, err = GetFreePort()
+func main() {
+	port := 8080
+	if envPort := os.Getenv("PORT"); envPort != "" {
+		p, err := strconv.Atoi(envPort)
+		if err == nil {
+			port = p
+		}
+	}
+
+	// This will be the port at which the real server will be running
+	targetPort, err := getFreePort(port)
 	if err != nil {
 		panic("Can't get free port")
 	}
+
+	go spinRealServer(targetPort)
+
+	remote, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", targetPort))
+	if err != nil {
+		panic(err)
+	}
+
+	revp := httputil.NewSingleHostReverseProxy(remote)
+	// Configure the reverse proxy to use HTTPS
+	revp.Transport = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	// Create a new Proxy instance
+	proxy := &Proxy{
+		target:     remote,
+		targetPort: targetPort,
+		revp:       revp,
+	}
+
+	err = http.ListenAndServe(fmt.Sprintf(":%d", port), proxy)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func spinRealServer(port int) {
 	// Check if there are additional arguments
 	if len(os.Args) > 1 {
 		cmd := exec.Command(os.Args[1], os.Args[2:]...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		cmd.Env = append(cmd.Env, fmt.Sprintf("PORT=%d", outPort))
+		cmd.Env = cmd.Environ()
+		cmd.Env = append(cmd.Env, fmt.Sprintf("PORT=%d", port))
 
 		// Start the specified command
 		err := cmd.Start()
@@ -49,92 +84,31 @@ func init() {
 		}
 
 		fmt.Printf("Started process %s with PID %d\n", os.Args[1], cmd.Process.Pid)
-
 	}
 }
 
-func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080" // Default to port 8080 if no PORT env variable is set
-	}
-	// Start the proxy server on port 8080
-	err := startProxy("127.0.0.1:" + port)
-	if err != nil {
-		panic(err)
-	}
-}
-
-// ... (rest of the code remains the same)
-
-func startProxy(address string) error {
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-	fmt.Printf("Proxy server listening on %s\n", address)
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Printf("Error accepting connection: %v\n", err)
-			continue
+func getFreePort(otherThan int) (port int, err error) {
+	var a *net.TCPAddr
+	if a, err = net.ResolveTCPAddr("tcp", "localhost:0"); err == nil {
+		var l *net.TCPListener
+		if l, err = net.ListenTCP("tcp", a); err == nil {
+			defer l.Close()
+			port := l.Addr().(*net.TCPAddr).Port
+			if port != otherThan {
+				return port, nil
+			} else {
+				port, err := getFreePort(otherThan)
+				return port, err
+			}
 		}
-
-		go handleConnection(conn)
 	}
+	return
 }
 
-func handleConnection(clientConn net.Conn) {
-	defer clientConn.Close()
-
-	clientReader := bufio.NewReader(clientConn)
-
-	// Read the request from the client
-	request, err := http.ReadRequest(clientReader)
-	if err != nil {
-		fmt.Printf("Error reading request: %v\n", err)
-		return
-	}
-
-	// Filter invalid headers
-	filterInvalidHeaders(request.Header)
-
-	// Connect to the destination server
-	outConn := fmt.Sprintf("localhost:%d", outPort)
-	retries := 0
-retry:
-	destConn, err := net.Dial("tcp", outConn)
-	if err != nil {
-		if firstConn && retries < 20 {
-			time.Sleep(time.Second * 1)
-			retries += 1
-			goto retry
-		}
-		fmt.Printf("Error connecting to destination: %v\n", err)
-		return
-	}
-	defer destConn.Close()
-
-	// Write the modified request to the destination
-	err = request.Write(destConn)
-	if err != nil {
-		fmt.Printf("Error writing request to destination: %v\n", err)
-		return
-	}
-
-	// Copy the response from the destination to the client
-	io.Copy(clientConn, destConn)
-	firstConn = false
-}
-
-func filterInvalidHeaders(headers http.Header) {
-	// Define invalid headers
-
-	for header := range headers {
-		if reg.FindString(header) != "" {
-			delete(headers, header)
+func removeInvalidHeaders(headers *http.Header) {
+	for k, _ := range *headers {
+		if headerRegx.MatchString(k) {
+			headers.Del(k)
 		}
 	}
 }
